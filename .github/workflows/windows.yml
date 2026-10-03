@@ -1,0 +1,76 @@
+# GRCFin Windows sürümü: gizli GRCFin-Desktop deposundaki kaynak koddan derlenir ve bu depoda
+# taslak sürüm olarak yayınlanır. Bu depo herkese açık olduğu için GitHub Actions ücretsizdir.
+# macOS sürümü burada derlenmez: Mac'te scripts/release-mac.sh ile imzalanıp aynı sürüme eklenir.
+#
+# Güvenlik:
+# - Yalnızca depo sahibi Actions ekranından elle başlatabilir; pull request'lerde hiç çalışmaz.
+# - Kaynak kod salt okunur bir deploy key ile çekilir (SOURCE_DEPLOY_KEY), kayıtlara yazılmaz.
+# - Kullanılan eylemler değişmez commit kimliklerine sabitlenmiştir.
+
+name: "Windows sürümü"
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "GRCFin-Desktop'taki sürüm etiketi (ör. v1.1.3)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    if: github.actor == github.repository_owner
+    runs-on: windows-latest
+    steps:
+      - name: Sürüm etiketini denetle
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ($env:TAG -notmatch '^v\d+\.\d+\.\d+$') { Write-Error "Geçersiz etiket: $env:TAG"; exit 1 }
+
+      - name: Kaynak kodu çek (salt okunur)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: rizaocalir/GRCFin-Desktop
+          ref: ${{ inputs.tag }}
+          ssh-key: ${{ secrets.SOURCE_DEPLOY_KEY }}
+          persist-credentials: false
+
+      - name: Etiket ile uygulama sürümü aynı mı
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          $v = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ("v$v" -ne $env:TAG) { Write-Error "Etiket $env:TAG, uygulama sürümü $v"; exit 1 }
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: lts/*
+
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+
+      - name: Bağımlılıklar
+        run: npm ci
+
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: "GRCFin v__VERSION__"
+          releaseBody: "macOS ve Windows için GRCFin. İndirmek için aşağıdaki dosyaları kullanın."
+          releaseDraft: true
+          prerelease: false
+          owner: rizaocalir
+          repo: GRCFin-Releases
+          releaseCommitish: main
